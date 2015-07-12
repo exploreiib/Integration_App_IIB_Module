@@ -1,0 +1,221 @@
+DECLARE SF_CMS_BRK_RefreshCache_CacheWMBAuditTb SHARED ROW NULL;
+DECLARE AUDIT_FILTER EXTERNAL CHAR '0';
+
+CREATE FILTER MODULE SF_CMS_BRK_SoapAuditHandling_AuditCheck
+	CREATE FUNCTION Main() RETURNS BOOLEAN
+	BEGIN
+		
+		DECLARE sMessageFlowLabel CHAR;
+		DECLARE sNodeLabel CHAR;
+		DECLARE rTemp ROW;
+		DECLARE cRequireAudit CHAR;
+		DECLARE cAuditQName CHAR;
+		DECLARE blnRequireAudit BOOLEAN;
+		DECLARE iDotIndex INTEGER;
+		DECLARE cType CHARACTER;
+		
+		-- CALL loadCacheWMBAuditTb();
+		
+		SET sMessageFlowLabel = MessageFlowLabel;
+		SET sNodeLabel = UCASE(NodeLabel);
+--		SET iDotIndex = POSITION('.' IN sNodeLabel) - 1;
+--		SET sNodeLabel = LEFT(sNodeLabel, iDotIndex);
+--		 
+--		IF sNodeLabel = 'AUDIT_IN' OR sNodeLabel = 'SOAP_AUDIT_IN' OR sNodeLabel = 'AUDITIN' THEN
+--			SET cType = 'IN';
+--		ELSEIF sNodeLabel = 'AUDIT_OUT' OR sNodeLabel = 'SOAP_AUDIT_OUT' OR sNodeLabel = 'AUDITOUT' THEN
+--			SET cType = 'OUT';
+--		ELSEIF sNodeLabel = 'AUDIT_ERR' OR sNodeLabel = 'SF_CMS_BRK_ERRORHANDLING' THEN
+--			SET cType = 'ERR';
+--		END IF;
+		
+		IF POSITION('AUDIT_IN' IN sNodeLabel) > 0 OR POSITION('SOAP_AUDIT_IN' IN sNodeLabel) > 0 THEN
+			SET cType = 'IN';
+		ELSEIF POSITION('AUDIT_OUT' IN sNodeLabel) > 0 OR POSITION('SOAP_AUDIT_OUT' IN sNodeLabel) > 0 THEN
+			SET cType = 'OUT';
+		ELSEIF POSITION('AUDIT_ERR' IN sNodeLabel) > 0 OR POSITION('SF_CMS_BRK_ERRORHANDLING' IN sNodeLabel) > 0 THEN
+			SET cType = 'ERR';
+		END IF;
+		 
+		CASE cType
+			WHEN 'IN' THEN
+				SET rTemp.Rec[] = (SELECT A.AUDIT_IN, A.AUDIT_IN_QNAME FROM SF_CMS_BRK_RefreshCache_CacheWMBAuditTb.rec[] AS A WHERE A.FLOW_NAME = sMessageFlowLabel);
+				SET cRequireAudit = rTemp.Rec[1].AUDIT_IN;
+				SET cAuditQName = rTemp.Rec[1].AUDIT_IN_QNAME;
+			WHEN 'OUT' THEN
+				SET rTemp.Rec[] = (SELECT A.AUDIT_OUT, A.AUDIT_OUT_QNAME FROM SF_CMS_BRK_RefreshCache_CacheWMBAuditTb.rec[] AS A WHERE A.FLOW_NAME = sMessageFlowLabel);
+				SET cRequireAudit = rTemp.Rec[1].AUDIT_OUT;
+				SET cAuditQName = rTemp.Rec[1].AUDIT_OUT_QNAME;
+			WHEN 'ERR' THEN
+				IF Environment.Variable.ERR_LOG IS TRUE THEN
+					SET rTemp.Rec[] = (SELECT A.AUDIT_ERR_LOG, A.AUDIT_ERR_LOG_QNAME FROM SF_CMS_BRK_RefreshCache_CacheWMBAuditTb.rec[] AS A WHERE A.FLOW_NAME = sMessageFlowLabel);
+					SET cRequireAudit = rTemp.Rec[1].AUDIT_ERR_LOG;
+					SET cAuditQName = rTemp.Rec[1].AUDIT_ERR_LOG_QNAME;
+				ELSE
+					SET rTemp.Rec[] = (SELECT A.AUDIT_ERR, A.AUDIT_ERR_QNAME FROM SF_CMS_BRK_RefreshCache_CacheWMBAuditTb.rec[] AS A WHERE A.FLOW_NAME = sMessageFlowLabel);
+					SET cRequireAudit = rTemp.Rec[1].AUDIT_ERR;
+					SET cAuditQName = rTemp.Rec[1].AUDIT_ERR_QNAME;
+				END IF;
+			ELSE
+				RETURN UNKNOWN;
+		END CASE;
+
+		SET blnRequireAudit = 
+		CASE cRequireAudit
+			WHEN 'Y' THEN TRUE
+			WHEN 'N' THEN FALSE
+			ELSE UNKNOWN
+		END;
+		
+		IF blnRequireAudit IS TRUE THEN
+			-- Set Destination Queue
+			SET DestinationList.Destination.MQDestinationList.DestinationData[1].queueName = cAuditQName;
+		END IF;
+		
+		RETURN blnRequireAudit;
+	END;
+END MODULE;
+
+--	
+--CREATE FUNCTION getProjectName() RETURNS CHAR
+--	BEGIN
+--		DECLARE sProject_Name CHAR '';
+--		DECLARE sMessageFlowLabel CHAR;
+--		DECLARE sSQL_GetProjectName CHAR;
+--		DECLARE recTemp ROW;
+--		
+--		SET sMessageFlowLabel = MessageFlowLabel;
+--		SET sSQL_GetProjectName = 'SELECT PROJECT_NAME FROM WMBRKS.MBRK_AUDIT_CONTROL WHERE FLOW_NAME = ''' || sMessageFlowLabel || '''';			
+--		
+--		SET recTemp.rec[] = PASSTHRU(sSQL_GetProjectName);
+--		
+--		DECLARE iCountRec INTEGER;
+--		SET iCountRec = CARDINALITY(recTemp.rec[]);
+--		
+--		IF iCountRec > 0 THEN
+--			SET sProject_Name = recTemp.rec[1].PROJECT_NAME;
+--		END IF;		
+--		
+--		RETURN sProject_Name;
+--	END;
+
+CREATE COMPUTE MODULE GenerateSoapAuditId
+	CREATE FUNCTION Main() RETURNS BOOLEAN
+	BEGIN
+		DECLARE tmpNs CHAR;
+		DECLARE childValue CHAR;
+		DECLARE isDefaultNamespace BOOLEAN true;
+		DECLARE soapAuditId CHAR;
+		DECLARE isXMLNS BOOLEAN FALSE;
+		DECLARE I INTEGER;
+		
+		DECLARE sNodeLabel CHAR;
+		DECLARE cAuditType CHAR;
+		DECLARE bIsSoap BOOLEAN FALSE;
+		
+		DECLARE cCorrelId CHAR;
+		
+		SET sNodeLabel = UCASE(NodeLabel);
+		
+		-- Check whether incoming is a SOAP or MQ Audit
+		IF POSITION('SOAP_AUDIT' IN sNodeLabel) > 0 THEN
+			SET bIsSoap = TRUE;
+		END IF;
+		
+		-- Check whether incoming is an AuditIn or AuditOut
+		IF POSITION('IN' IN sNodeLabel) > 0 THEN
+			SET cAuditType = 'I';
+		ELSE
+			SET cAuditType = 'O';
+		END IF;
+		
+		-- Add on the expiry to avoid overflow in the audit queue
+		-- SET OutputRoot.MQMD.Expiry = CAST((CURRENT_TIME + INTERVAL '30' MINUTE) AS GMTTIMESTAMP);
+		
+--		SET I = CARDINALITY(InputRoot.XMLNS.*[]);
+--		
+--		IF(I > 0) THEN
+--			SET isXMLNS = TRUE;
+--		END IF;
+		
+		-- SET OutputRoot.XMLNSC.SOAP.SoapAuditId = generateUniqueId(InputLocalEnvironment.Destination.SOAP.Reply.ReplyIdentifier);
+		
+--		-- Add on to cater XMLNS
+--		IF(isXMLNS = TRUE) THEN
+--			SET OutputRoot.XMLNSC.SOAP.Body = InputRoot.XMLNS;
+--		ELSE
+--			SET OutputRoot.XMLNSC.SOAP.Body = InputRoot.XMLNSC;
+--		END IF;		
+		
+		IF bIsSoap IS TRUE THEN
+			-- Store In The LocalEnvironment Variable
+			IF(Environment.Variable.SoapAuditId IS NULL) THEN
+				SET soapAuditId = generateUniqueId(InputLocalEnvironment.Destination.SOAP.Reply.ReplyIdentifier);
+				SET Environment.Variable.SoapAuditId = soapAuditId;
+			ELSE
+				SET soapAuditId = Environment.Variable.SoapAuditId;
+			END IF;
+			
+			SET OutputRoot.XMLNSC.AUDIT.SoapAuditId = soapAuditId;
+		ELSE
+			IF InputRoot.MQMD.MsgId IS NOT NULL THEN
+				SET cCorrelId = InputRoot.MQMD.CorrelId;
+			
+				IF POSITION(cCorrelId IN '000000000000000000000000000000000000000000000000') > 0 THEN
+					SET OutputRoot.MQMD.CorrelId = InputRoot.MQMD.MsgId;
+				ELSE
+					SET OutputRoot.MQMD.CorrelId = InputRoot.MQMD.CorrelId;
+				END IF;
+				SET OutputRoot.MQMD.Format = 'MQSTR';
+			END IF;
+		END IF;
+		
+		SET OutputRoot.XMLNSC.AUDIT.SRCE_APPL = MessageFlowLabel;
+		SET OutputRoot.XMLNSC.AUDIT.AUDIT_TYPE = cAuditType;
+		SET OutputRoot.XMLNSC.AUDIT.AUDIT_FILTER = AUDIT_FILTER;
+		
+		SET OutputRoot.XMLNSC.AUDIT.WMBAuditBody = InputBody;
+
+--		SET OutputRoot.XMLNSC = InputRoot.XMLNSC;
+--		
+--		SET tmpNs = FIELDNAMESPACE(InputRoot.XMLNSC.*);
+--		
+--		SET childValue = FIELDVALUE(InputRoot.XMLNSC.*:*[>]);
+--		
+--		IF (childValue IS NOT NULL OR childValue <> '') THEN
+--			SET	isDefaultNamespace = false;
+--		END IF;
+--		
+--		IF (isDefaultNamespace = true) THEN
+--			CREATE PREVIOUSSIBLING OF OutputRoot.XMLNSC.*.[>] NAMESPACE tmpNs NAME 'SoapAuditId';
+--		ELSE
+--			CREATE PREVIOUSSIBLING OF OutputRoot.XMLNSC.*.[>] NAME 'SoapAuditId';
+--		END IF;
+--		
+--		SET OutputRoot.XMLNSC.*.*:SoapAuditId = generateUniqueId(InputLocalEnvironment.Destination.SOAP.Reply.ReplyIdentifier);
+--		
+--		RETURN TRUE;
+	END;
+END MODULE;
+
+
+
+CREATE FILTER MODULE SF_CMS_BRK_SoapAuditHandling_CheckSoap
+	CREATE FUNCTION Main() RETURNS BOOLEAN
+	BEGIN
+		
+		DECLARE sNodeLabel CHAR;
+		DECLARE bSoap BOOLEAN UNKNOWN;
+		
+		SET sNodeLabel = UCASE(NodeLabel);
+		
+		IF POSITION('SOAP' IN sNodeLabel) > 0 THEN
+			SET bSoap = TRUE;
+		ELSE
+			SET bSoap = FALSE;
+		END IF;
+		
+		RETURN bSoap;
+	END;
+
+END MODULE;

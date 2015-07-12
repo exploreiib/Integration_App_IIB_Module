@@ -1,0 +1,52 @@
+
+
+CREATE COMPUTE MODULE SF_CMS_BRK_RefreshCache_RefreshCacheData
+	CREATE FUNCTION Main() RETURNS BOOLEAN
+	BEGIN
+		DECLARE refreshCacheID CHAR;
+		
+		SET refreshCacheID = InputRoot.XMLNSC.CacheData.RefreshValue;
+		
+		CASE refreshCacheID
+			WHEN 'MBRK_AUDIT_CONTROL' THEN
+				SET SF_CMS_BRK_RefreshCache_CacheWMBAuditTb = NULL;
+				CALL loadCacheWMBAuditTb();
+		END CASE;
+		
+		RETURN TRUE;
+	END;
+	
+	CREATE PROCEDURE CopyMessageHeaders() BEGIN
+		DECLARE I INTEGER 1;
+		DECLARE J INTEGER;
+		SET J = CARDINALITY(InputRoot.*[]);
+		WHILE I < J DO
+			SET OutputRoot.*[I] = InputRoot.*[I];
+			SET I = I + 1;
+		END WHILE;
+	END;
+
+	CREATE PROCEDURE CopyEntireMessage() BEGIN
+		SET OutputRoot = InputRoot;
+	END;
+END MODULE;
+
+
+
+CREATE FUNCTION loadCacheWMBAuditTb()
+	BEGIN
+		
+		IF SF_CMS_BRK_RefreshCache_CacheWMBAuditTb.valid IS NULL THEN
+			DECLARE sSQL_GetAuditSetting CHAR;
+			DECLARE sPROJECT_NAME CHAR;
+			DECLARE sMessageFlowLabel CHAR;
+			
+			SET sMessageFlowLabel = MessageFlowLabel;
+			-- SET sPROJECT_NAME = getProjectName();
+			
+			-- SET sSQL_GetAuditSetting = 'SELECT * FROM WMBRKS.MBRK_AUDIT_CONTROL WHERE PROJECT_NAME = ''' || sPROJECT_NAME || '''';			
+			SET sSQL_GetAuditSetting = 'SELECT * FROM WMBRKS.MBRK_AUDIT_CONTROL WHERE FLOW_NAME = ''' || sMessageFlowLabel || '''';			
+	 		SET SF_CMS_BRK_RefreshCache_CacheWMBAuditTb.rec[] = PASSTHRU(sSQL_GetAuditSetting); 			
+			SET SF_CMS_BRK_RefreshCache_CacheWMBAuditTb.valid = '0';
+		END IF;
+	END;

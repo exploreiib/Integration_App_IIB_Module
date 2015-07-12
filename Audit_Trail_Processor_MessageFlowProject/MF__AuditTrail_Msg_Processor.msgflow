@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ecore:EPackage xmi:version="2.0" xmlns:xmi="http://www.omg.org/XMI" xmlns:ComIbmCompute.msgnode="ComIbmCompute.msgnode" xmlns:ComIbmMQInput.msgnode="ComIbmMQInput.msgnode" xmlns:SF_CMS_BRK_ErrorHandling.msgflow="SF_CMS_BRK_ErrorHandling.msgflow" xmlns:ecore="http://www.eclipse.org/emf/2002/Ecore" xmlns:eflow="http://www.ibm.com/wbi/2005/eflow" xmlns:utility="http://www.ibm.com/wbi/2005/eflow_utility" xmi:id="EPackage_1" nsURI="MF__AuditTrail_Msg_Processor.msgflow" nsPrefix="MF__AuditTrail_Msg_Processor.msgflow">
+  <eClassifiers xmi:type="eflow:FCMComposite" xmi:id="FCMComposite_1" name="FCMComposite_1">
+    <eSuperTypes href="http://www.ibm.com/wbi/2005/eflow#//FCMBlock"/>
+    <translation xmi:type="utility:TranslatableString" xmi:id="TranslatableString_1" key="MF__AuditTrail_Msg_Processor" bundleName="MF__AuditTrail_Msg_Processor" pluginId="Audit_Trail_Processor_MessageFlowProject"/>
+    <colorGraphic16 xmi:type="utility:GIFFileGraphic" xmi:id="GIFFileGraphic_1" resourceName="platform:/plugin/Audit_Trail_Processor_MessageFlowProject/icons/full/obj16/MF__AuditTrail_Msg_Processor.gif"/>
+    <colorGraphic32 xmi:type="utility:GIFFileGraphic" xmi:id="GIFFileGraphic_2" resourceName="platform:/plugin/Audit_Trail_Processor_MessageFlowProject/icons/full/obj30/MF__AuditTrail_Msg_Processor.gif"/>
+    <composition xmi:id="Composition_1">
+      <nodes xmi:type="ComIbmMQInput.msgnode:FCMComposite_1" xmi:id="FCMComposite_1_5" location="19,50" queueName="QL.MBRK.AUDIT.INMSG.04" messageDomainProperty="XMLNSC">
+        <translation xmi:type="utility:ConstantString" string="QL.MBRK.AUDIT.INMSG.04"/>
+      </nodes>
+      <nodes xmi:type="ComIbmCompute.msgnode:FCMComposite_1" xmi:id="FCMComposite_1_3" location="383,51" dataSource="XE" computeExpression="esql://routine/#MF_CMS_BRK_AuditTrail_Compute.Main">
+        <translation xmi:type="utility:ConstantString" string="AuditTrail_InMsg"/>
+      </nodes>
+      <nodes xmi:type="SF_CMS_BRK_ErrorHandling.msgflow:FCMComposite_1" xmi:id="FCMComposite_1_1" location="190,50" queueName="QL.MBRK.ERR.02" queueName1="QL.MBRK.ERR.LOG.02">
+        <translation xmi:type="utility:ConstantString" string="AUDIT_ERR"/>
+      </nodes>
+      <nodes xmi:type="ComIbmCompute.msgnode:FCMComposite_1" xmi:id="FCMComposite_1_2" location="292,50" computeExpression="esql://routine/#MF_CMS_BRK_AuditTrail_GetDetails.Main">
+        <translation xmi:type="utility:ConstantString" string="GetDetails"/>
+      </nodes>
+      <connections xmi:type="eflow:FCMConnection" xmi:id="FCMConnection_1" targetNode="FCMComposite_1_1" sourceNode="FCMComposite_1_5" sourceTerminalName="OutTerminal.failure" targetTerminalName="InTerminal.Failure"/>
+      <connections xmi:type="eflow:FCMConnection" xmi:id="FCMConnection_2" targetNode="FCMComposite_1_1" sourceNode="FCMComposite_1_5" sourceTerminalName="OutTerminal.out" targetTerminalName="InTerminal.MainlineIn"/>
+      <connections xmi:type="eflow:FCMConnection" xmi:id="FCMConnection_3" targetNode="FCMComposite_1_1" sourceNode="FCMComposite_1_5" sourceTerminalName="OutTerminal.catch" targetTerminalName="InTerminal.Catch"/>
+      <connections xmi:type="eflow:FCMConnection" xmi:id="FCMConnection_4" targetNode="FCMComposite_1_2" sourceNode="FCMComposite_1_1" sourceTerminalName="OutTerminal.MainlineOut" targetTerminalName="InTerminal.in"/>
+      <connections xmi:type="eflow:FCMConnection" xmi:id="FCMConnection_5" targetNode="FCMComposite_1_3" sourceNode="FCMComposite_1_2" sourceTerminalName="OutTerminal.out" targetTerminalName="InTerminal.in"/>
+    </composition>
+    <propertyOrganizer xmi:id="PropertyOrganizer_1"/>
+    <stickyBoard/>
+  </eClassifiers>
+</ecore:EPackage>

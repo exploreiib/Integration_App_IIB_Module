@@ -1,0 +1,309 @@
+DECLARE ERROR_FILTER EXTERNAL CHAR '0';
+
+CREATE COMPUTE MODULE SF_CMS_ERRORHANDLING_Compute
+	CREATE FUNCTION Main() RETURNS BOOLEAN
+	BEGIN
+--		CALL CopyMessageHeaders();
+		-- CALL CopyEntireMessage();
+		
+		SET OutputRoot.Properties.MessageDomain = 'XMLNSC';
+		
+		SET OutputRoot.MQMD.MsgId = InputRoot.MQMD.MsgId;
+		SET OutputRoot.MQMD.Format = 'MQSTR';
+		
+		DECLARE Error INTEGER;  /* Error number extracted from exception list */
+		DECLARE ErrorDesc CHARACTER 'Error_Description';  /* Added New - Error description extracted from exception list */
+		SET Error = 0;
+		-- DECLARE Path CHARACTER;  /* Current path within the exception list */
+
+		-- Check if msg has a body
+		DECLARE msgbody BLOB;
+		DECLARE noBody BOOLEAN;
+		DECLARE J INTEGER CARDINALITY(InputRoot.*[]);
+		
+		SET noBody = FALSE;
+		IF FIELDNAME (InputRoot.*[<]) = 'MQMD' OR FIELDNAME (InputRoot.*[<]) = 'MQRFH2' THEN
+			SET OutputRoot.*[J] = InputRoot.*[J]; /* copy last child since CopyMessageHeaders did not */
+			SET noBody = TRUE;
+		END IF;
+
+--      Remark and replace with a procedure
+--		/* Start at first child of exception list */
+--		SET Path = 'InputExceptionList.*[1]';
+--		
+--		/* Loop until no more children */
+--		WHILE EVAL( 'FIELDNAME(' || Path || ') IS NOT NULL' ) DO
+--			/* Check if error number is available */
+--			IF EVAL( 'FIELDNAME(' || Path || '.Number) IS NOT NULL' ) THEN
+--				/* Remember only the deepest error number */
+--				SET Error = EVAL( Path || '.Number' );
+--			END IF;
+--		
+--			/* Step to last child of current element (usually a nested exception list */
+--			SET Path = Path || '.*[<]';
+--		END WHILE; /* End loop */
+		
+		IF(InputLocalEnvironment.Destination.SOAP.Reply.ReplyIdentifier IS NOT NULL OR Environment.Variable.SoapAuditId IS NOT NULL) THEN
+			IF(Environment.Variable.SoapAuditId IS NULL) THEN
+				SET OutputRoot.XML.ErrorMessage.SoapAuditId = generateUniqueId(InputLocalEnvironment.Destination.SOAP.Reply.ReplyIdentifier);
+			ELSE
+				SET OutputRoot.XML.ErrorMessage.SoapAuditId = Environment.Variable.SoapAuditId;
+			END IF;
+		END IF;
+
+		CALL getLastExceptionDetail(InputExceptionList, Error, ErrorDesc);
+		
+		-- Build error message in XML format
+		
+		IF Error <> 0 THEN
+			SET OutputRoot.XML.ErrorMessage.ExceptionNumber = Error;
+			SET OutputRoot.XML.ErrorMessage.ExceptionText = ErrorDesc; -- New
+			SET OutputRoot.XML.ErrorMessage.SRCE_APP_NAME = MessageFlowLabel; -- New
+			SET OutputRoot.XML.ErrorMessage.ERROR_FILTER = ERROR_FILTER;
+		END IF;
+
+--		Remark because seems like never hit this code		
+--		IF NULLIF(Environment.ErrorDetected,'') IS NOT NULL THEN
+--			SET OutputRoot.XML.ErrorMessage.ErrorDetected = Environment.ErrorDetected;
+--		END IF;
+		
+		/* Check if Input Queue is NULL mean it from SOAP INPUT */
+		DECLARE SourceQueue CHAR;  /* Source Queue Name  */
+		SET SourceQueue = InputRoot.MQMD.SourceQueue;
+		
+		/* Insert the Input Queue */
+		SET OutputRoot.XML.ErrorMessage.SourceQueueName = SourceQueue ;
+		
+		/* Insert original message using XML.CDataSection.. in case special characters are present. */
+		IF noBody THEN
+			SET OutputRoot.XML.ErrorMessage.OriginalMessage = 'No message body';
+		ELSE
+			SET msgbody = X'';
+			IF FIELDNAME(InputRoot.*[<]) = 'BLOB' THEN
+				SET msgbody = InputRoot."BLOB"."BLOB";
+			ELSE
+				SET msgbody = BITSTREAM(InputBody);
+			END IF;
+--			SET OutputRoot.XML.ErrorMessage.OriginalMessage.(XML.CDataSection) = CAST(msgbody AS CHAR CCSID 1208);
+		END IF;
+		
+		
+
+--		ErrorMessage.ExceptionList.RecoverableException.RecoverableException.RecoverableException.RecoverableException.Insert.Type
+		/* Insert full exceptionlist tree in msg */
+		
+		IF FIELDNAME(InputExceptionList.*[1]) IS NOT NULL THEN
+			SET OutputRoot.XML.ErrorMessage.ExceptionList = InputExceptionList;
+		END IF;
+		
+		IF ( OutputRoot.XML.ErrorMessage.ExceptionList.RecoverableException.RecoverableException.RecoverableException.RecoverableException.Insert[3].Type IS NOT NULL ) THEN
+			SET OutputRoot.XML.ErrorMessage.ExceptionList.RecoverableException.RecoverableException.RecoverableException.RecoverableException.Insert[3].Type='5' ;
+			SET OutputRoot.XML.ErrorMessage.ExceptionList.RecoverableException.RecoverableException.RecoverableException.RecoverableException.Insert[3].Text='THROW EXCEPTION CATALOG &apos;InvalidMessage&apos; MESSAGE 9999 VALUES( &apos;ErrorObject&apos;, Environment.Variable.ErrorObject);' ;		
+		END IF ;
+		RETURN TRUE;
+	END;
+	
+	-- New Added
+	CREATE PROCEDURE getLastExceptionDetail(IN InputTree reference,OUT messageNumber integer,
+		OUT messageText char)	
+    /****************************************************************************
+	 * A procedure that will get the details of the last exception from a message
+	 * IN InputTree:  The incoming exception list
+	 * IN messageNumber:  The last message numberr.
+	 * IN messageText: The last message text.
+	 *****************************************************************************/
+   BEGIN
+   	    -- Create a reference to the first child of the exception list
+   	    declare ptrException reference to InputTree.*[1];
+   	    -- keep looping while the moves to the child of exception list work 
+		WHILE lastmove(ptrException) DO
+			-- store the current values for the error number and text
+			IF ptrException.Number is not null THEN
+        		SET messageNumber = ptrException.Number;
+        		SET messageText = ptrException.Text;
+  			END IF;
+  			-- now move to the last child which should be the next exceptionlist
+			move ptrException lastchild;
+		END WHILE; 
+	END;
+
+	CREATE PROCEDURE CopyMessageHeaders() BEGIN
+		DECLARE I INTEGER 1;
+		DECLARE J INTEGER CARDINALITY(InputRoot.*[]);
+		WHILE I < J DO
+			SET OutputRoot.*[I] = InputRoot.*[I];
+			SET I = I + 1;
+		END WHILE;
+	END;
+
+	CREATE PROCEDURE CopyEntireMessage() BEGIN
+		SET OutputRoot = InputRoot;
+	END;
+	
+	END MODULE;
+
+
+CREATE FILTER MODULE SF_CMS_ERRORHANDLING_Filter
+	CREATE FUNCTION Main() RETURNS BOOLEAN
+	BEGIN
+		IF Root.MQMD.BackoutCount > 0 THEN
+			/* AND
+			ExceptionList.RecoverableException.Number IS NOT NULL AND
+			ExceptionList.RecoverableException.Number = 2652 THEN */
+			SET Environment.Variable.ERR_LOG = TRUE;
+			RETURN TRUE; /* this is the result of rollback generated in error handling */
+		ELSE
+			IF ExceptionList.UserException.Number IS NOT NULL AND
+				ExceptionList.UserException.Number = 3049 THEN
+				SET Environment.Variable.ERR_LOG = TRUE;
+				RETURN TRUE; /* this is the result of throw in error handling */
+			ELSE
+				RETURN FALSE;
+			END IF;
+		END IF;
+	END;
+
+END MODULE;
+
+
+CREATE FILTER MODULE SF_CMS_ERRORHANDLING_MainlineFilter
+	CREATE FUNCTION Main() RETURNS BOOLEAN
+	BEGIN
+		IF Root.MQMD.BackoutCount = 0 THEN
+			RETURN TRUE;
+		ELSE 
+			RETURN FALSE;
+		END IF;
+	END;
+
+END MODULE;
+
+
+CREATE COMPUTE MODULE SF_CMS_BRK_ErrorHandling_Compute
+	CREATE FUNCTION Main() RETURNS BOOLEAN
+	BEGIN
+		CALL CopyMessageHeaders();
+
+		CALL InsertIntoDatabase();
+
+		-- CALL CopyEntireMessage();
+		RETURN TRUE;
+	END;
+
+	CREATE PROCEDURE CopyMessageHeaders() BEGIN
+		DECLARE I INTEGER;
+		DECLARE J INTEGER;
+		SET I = 1;
+		SET J = CARDINALITY(InputRoot.*[]);
+		WHILE I < J DO
+			SET OutputRoot.*[I] = InputRoot.*[I];
+			SET I = I + 1;
+		END WHILE;
+	END;
+
+	CREATE PROCEDURE CopyEntireMessage() BEGIN
+		SET OutputRoot = InputRoot;
+	END;
+	
+	CREATE PROCEDURE InsertIntoDatabase ( )
+		BEGIN
+		DECLARE inputMsgRef REFERENCE TO InputRoot.XML.ErrorMessage ;
+		DECLARE envRef REFERENCE TO Environment ;
+		DECLARE mySql CHARACTER;
+		
+		-- Not null
+		SET envRef.Variable.COUNTER = 'DEFAULT';
+		SET envRef.Variable.MSG_MQMD_MSGID = SUBSTRING ( ( CAST ( InputRoot.MQMD.MsgId As CHARACTER ) ) FROM 3 FOR 48 );
+		
+		-- SET envRef.Variable.sqlQuery='INSERT INTO MOHAN.EAI_ERRORLOG (COUNTER, MSG_MQMD_MSGID, MSG_REF_ID, TRAN_DATE, TRAN_TIME, SRCE_MSG_CODE, SRCE_MSG_VERS_NO, SRCE_SS_ID, ERROR_CODE, ERROR_DESCRIPTION, ERROR_EXCEPTIONLIST, SRCE_QUEUE_NAME, ORIGINAL_DATA) ';
+		SET envRef.Variable.sqlQuery = 'INSERT INTO MAXISBRK.EAI_ERRORLOG (COUNTER, MSG_MQMD_MSGID, MSG_IN_DATE , MSG_IN_TIME , ERROR_CODE , ERROR_DESCRIPTION , ERROR_EXCEPTIONLIST , SRCE_QUEUE_NAME , SRCE_APP_NAME) VALUES ( ''' || envRef.Variable.COUNTER || ''', ''' || envRef.Variable.MSG_MQMD_MSGID || ''', ';
+		
+
+		SET envRef.Variable.MSG_IN_DATE = SUBSTRING ( CAST ( CURRENT_DATE AS CHARACTER ) FROM 7 FOR 10 );
+		SET envRef.Variable.MSG_IN_TIME = SUBSTRING ( CAST ( CURRENT_TIME AS CHARACTER ) FROM 7 FOR 8 );  
+		
+		SET envRef.Variable.ERROR_CODE = inputMsgRef.ExceptionNumber;
+		SET envRef.Variable.ERROR_DESCRIPTION = 'ERROR_DESCRIPTION';
+		SET envRef.Variable.ERROR_EXCEPTIONLIST = 'Error has occured, Look at the QL.MBRK.ERR queue for the error message. Original message is available on queue QL.MBRK.ERR.LOG. Correct the error and retry putting the original message on the input queue' ;
+		SET envRef.Variable.SRCE_QUEUE_NAME = inputMsgRef.SourceQueueName;
+		SET envRef.Variable.SRCE_APP_NAME = SUBSTRING( CAST ( InputRoot.MQMD.SourceQueue AS CHARACTER ) FROM 4 FOR 4 );
+
+		-- set all the values
+				
+		SET envRef.Variable.sqlQuery = envRef.Variable.sqlQuery || '''' || envRef.Variable.MSG_IN_DATE || ''', ' ;
+		SET envRef.Variable.sqlQuery = envRef.Variable.sqlQuery || '''' || envRef.Variable.MSG_IN_TIME || ''', ' ;	
+		SET envRef.Variable.sqlQuery = envRef.Variable.sqlQuery || '''' || envRef.Variable.ERROR_CODE || ''', ';
+	
+		
+		SET envRef.Variable.sqlQuery = envRef.Variable.sqlQuery || '''' || envRef.Variable.ERROR_DESCRIPTION || ''', ';
+		
+		
+		SET envRef.Variable.sqlQuery = envRef.Variable.sqlQuery || '''' || envRef.Variable.ERROR_EXCEPTIONLIST || ''', ';
+		
+		
+		SET envRef.Variable.sqlQuery = envRef.Variable.sqlQuery || '''' || envRef.Variable.SRCE_QUEUE_NAME || ''', ' ;
+		
+		
+		SET envRef.Variable.sqlQuery = envRef.Variable.sqlQuery || '''' ||  envRef.Variable.SRCE_APP_NAME || ''' ) ';
+		
+		
+		-- execute the Database operation
+		
+		PASSTHRU ( envRef.Variable.sqlQuery );
+		
+		SET envRef.Variable = NULL;
+	END;
+END MODULE;
+
+CREATE COMPUTE MODULE FMCS_MBRK_MVT_MSW_01_DateTimeTransform_Compute
+	CREATE FUNCTION Main() RETURNS BOOLEAN
+	BEGIN
+		CALL CopyEntireMessage();
+		SET OutputLocalEnvironment = InputLocalEnvironment;
+		
+		DECLARE sOriginalString CHAR;
+		DECLARE sRestOfString CHAR;
+		DECLARE sWorkingString CHAR;
+		
+		DECLARE iPositionOfSpace INT 0;
+		DECLARE iPositionOfBackSlash INT 0;
+		
+		DECLARE iStartPosition INT 0;
+		DECLARE iEndPosition INT 0;
+		
+		SET sOriginalString = InputBody.msgDataLines.msgDataLine[2];
+
+		SET iPositionOfSpace = POSITION ( ' ' IN sOriginalString);
+		
+		
+		IF ( iPositionOfSpace = 0 ) THEN
+			SET sWorkingString = SUBSTRING(sOriginalString FROM 1 FOR LENGTH(sOriginalString)-2 );
+			SET sRestOfString = SUBSTRING(sOriginalString FROM LENGTH(sOriginalString)-1 );
+		ELSE
+			SET sWorkingString = SUBSTRING ( sOriginalString FROM 1 FOR iPositionOfSpace-1 );
+			SET sRestOfString = SUBSTRING ( sOriginalString FROM iPositionOfSpace );
+		END IF;
+		
+		SET iPositionOfBackSlash = POSITION ('/' IN sWorkingString);
+		IF ( iPositionOfBackSlash = 0 ) THEN -- String does not contain '/'
+			IF ( LENGTH( sWorkingString ) = 8 ) THEN---Ex AD204567 -> AD4567
+				SET sWorkingString = SUBSTRING( sWorkingString FROM 1 FOR 2 ) || SUBSTRING(sWorkingString FROM 5 FOR 4);
+			END IF;
+		ELSE -- String contains '/'
+			IF ( LENGTH( sWorkingString) = 15 ) THEN --- Ex AD204567/218901 -> AD4567/8901
+				SET sWorkingString = SUBSTRING( sWorkingString FROM 1 FOR 2 ) || SUBSTRING(sWorkingString FROM 5 FOR 5) ||
+										SUBSTRING( sWorkingString FROM 12 FOR 4 );
+			END IF;
+		END IF;
+		
+		SET OutputRoot.MRM.msgDataLines.msgDataLine[2] = sWorkingString || sRestOfString ;
+		RETURN TRUE;
+	END;
+
+
+	CREATE PROCEDURE CopyEntireMessage() BEGIN
+		SET OutputRoot = InputRoot;
+	END;
+END MODULE;
+
+
